@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -22,7 +22,7 @@ func ConfigCollections() []ConfigCollection {
 
 	defer jsonFile.Close()
 
-	content, _ := ioutil.ReadAll(jsonFile)
+	content, _ := io.ReadAll(jsonFile)
 
 	var collections []ConfigCollection
 

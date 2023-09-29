@@ -41,12 +41,18 @@ func GetConfigCollection(collection string) *ConfigCollection {
 	return nil
 }
 
-func GetConfigCollectionCapSize(collection string) int {
-	c := GetConfigCollection(collection)
+func writeConfigToFile(configCollections []ConfigCollection) error {
+	path, _ := filepath.Abs(*config)
 
-	if c == nil {
-		return 0
+	data, err := json.MarshalIndent(configCollections, "", "  ")
+	if err != nil {
+		return err
 	}
 
-	return c.CapSize
+	err = ioutil.WriteFile(path, data, 0644)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

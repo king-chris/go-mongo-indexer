@@ -1,18 +1,22 @@
 package main
 
+import "go.mongodb.org/mongo-driver/bson"
+
 type ConfigCollection struct {
-	Collection string           `json:"collection"`
-	CapSize    int              `json:"cap"`
-	Indexes    []map[string]int `json:"index"`
+	Collection string `json:"collection"`
+	Indexes    []IndexInfo
 }
 
 type IndexDiff struct {
-	Old map[string]map[string]IndexModel
-	New map[string]map[string]IndexModel
-	Cap map[string]int
+	Old map[string]map[string]IndexInfo
+	New map[string]map[string]IndexInfo
 }
 
-type IndexModel struct {
-	Name string
-	Keys map[string]int
+type IndexInfo struct {
+	Key                     bson.D                 `bson:"key"`
+	Name                    string                 `bson:"name"`
+	Unique                  bool                   `bson:"unique,omitempty"`
+	Weights                 map[string]interface{} `bson:"weights,omitempty"`
+	PartialFilterExpression map[string]interface{} `bson:"partialFilterExpression,omitempty"`
+	Collation               map[string]interface{} `bson:"collation,omitempty"`
 }

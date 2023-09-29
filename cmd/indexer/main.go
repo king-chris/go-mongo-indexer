@@ -14,6 +14,7 @@ import (
 var (
 	config   *string
 	apply    *bool
+	fetch    *bool
 	mongoUri *string
 	database *string
 	db       *mongo.Database
@@ -22,6 +23,7 @@ var (
 func init() {
 	config = flag.String("config", "", "[REQUIRED] index config file")
 	apply = flag.Bool("apply", false, "apply the changes")
+	fetch = flag.Bool("fetch", false, "fetch existing indexes")
 	mongoUri = flag.String("uri", "", "[REQUIRED] mongo uri path")
 	database = flag.String("database", "", "[REQUIRED] database Name")
 	flag.Parse()

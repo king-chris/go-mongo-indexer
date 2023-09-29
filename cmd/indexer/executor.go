@@ -164,57 +164,72 @@ func showDiff(indexDiff *IndexDiff) {
 		}
 
 		for _, index := range indexesToRemove {
-			util.PrintRed(fmt.Sprintf("- %s: %s\n", index.Name, util.JsonEncode(index.Key)))
+			indexJson, err := json.MarshalIndent(index, "", "  ")
+			if err != nil {
+				log.Printf("Error encoding index to JSON: %v", err)
+				continue
+			}
+			util.PrintRed(fmt.Sprintf("- %s: %s\n", index.Name, string(indexJson)))
 		}
 
 		for _, index := range indexesToAdd {
-			util.PrintGreen(fmt.Sprintf("+ %s: %s\n", index.Name, util.JsonEncode(index.Key)))
+			indexJson, err := json.MarshalIndent(index, "", "  ")
+			if err != nil {
+				log.Printf("Error encoding index to JSON: %v", err)
+				continue
+			}
+			util.PrintGreen(fmt.Sprintf("+ %s: %s\n", index.Name, string(indexJson)))
 		}
 	}
 }
 
-// Match existing indexes with the given config file and match and find the diff
-// the indexes that are not inside the config will be deleted, only the indexes in
-// the config file will be created
+// Generate a unique hash for an IndexInfo based on all its attributes
+func hashIndex(index IndexInfo) string {
+	content, _ := json.Marshal(index) // Note: consider handling the error
+	algorithm := md5.New()
+	algorithm.Write(content)
+	return hex.EncodeToString(algorithm.Sum(nil))
+}
+
 func getIndexesDiff() *IndexDiff {
 	oldIndexes := make(map[string]map[string]IndexInfo)
 	newIndexes := make(map[string]map[string]IndexInfo)
 
-	configCollections := ConfigCollections() // Assuming this function returns the collections from the config file
+	configCollections := ConfigCollections()
 
 	for _, configCollection := range configCollections {
 		collectionName := configCollection.Collection
-		currentIndexes := DbIndexes(collectionName) // Assuming this function returns the indexes from the database
+		currentIndexes := DbIndexes(collectionName)
 
-		// Maps to store the indexes by name for easy comparison
+		// Maps to store the indexes by hash for easy comparison
 		configIndexMap := make(map[string]IndexInfo)
 		currentIndexMap := make(map[string]IndexInfo)
 
 		// Populate the maps with the indexes from the config file and the database
 		for _, index := range configCollection.Indexes {
-			configIndexMap[index.Name] = index
+			configIndexMap[hashIndex(index)] = index
 		}
 		for _, index := range currentIndexes {
-			currentIndexMap[index.Name] = index
+			currentIndexMap[hashIndex(index)] = index
 		}
 
 		// Compare the indexes and populate oldIndexes and newIndexes
-		for name, index := range configIndexMap {
-			if _, exists := currentIndexMap[name]; !exists {
-				// This index is in the config file but not in the database, so it needs to be added
+		for hash, index := range configIndexMap {
+			if _, exists := currentIndexMap[hash]; !exists {
+				// This index is in the config file but not in the database, or has different configuration
 				if newIndexes[collectionName] == nil {
 					newIndexes[collectionName] = make(map[string]IndexInfo)
 				}
-				newIndexes[collectionName][name] = index
+				newIndexes[collectionName][index.Name] = index
 			}
 		}
-		for name, index := range currentIndexMap {
-			if _, exists := configIndexMap[name]; !exists {
-				// This index is in the database but not in the config file, so it needs to be removed
+		for hash, index := range currentIndexMap {
+			if _, exists := configIndexMap[hash]; !exists {
+				// This index is in the database but not in the config file, or has different configuration
 				if oldIndexes[collectionName] == nil {
 					oldIndexes[collectionName] = make(map[string]IndexInfo)
 				}
-				oldIndexes[collectionName][name] = index
+				oldIndexes[collectionName][index.Name] = index
 			}
 		}
 	}

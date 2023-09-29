@@ -20,9 +20,21 @@ const GB1 = 1000000000
 // Execute the command
 func execute() {
 	if *fetch {
-		configCollections, err := fetchIndexes()
+		collectionNames, err := db.ListCollectionNames(context.TODO(), bson.M{})
 		if err != nil {
 			log.Fatal(err)
+		}
+
+		var configCollections []ConfigCollection
+		for _, collectionName := range collectionNames {
+			indexes, err := getIndexesForCollection(collectionName)
+			if err != nil {
+				log.Fatal(err)
+			}
+			configCollections = append(configCollections, ConfigCollection{
+				Collection: collectionName,
+				Indexes:    indexes,
+			})
 		}
 
 		err = writeConfigToFile(configCollections)
@@ -41,40 +53,6 @@ func execute() {
 	if *apply {
 		applyDiff(indexDiff)
 	}
-}
-
-func fetchIndexes() ([]ConfigCollection, error) {
-	collectionNames, err := db.ListCollectionNames(context.TODO(), bson.M{})
-	if err != nil {
-		return nil, err
-	}
-
-	var configCollections []ConfigCollection
-	for _, collectionName := range collectionNames {
-		collection := db.Collection(collectionName)
-		indexesCursor, err := collection.Indexes().List(context.TODO())
-		if err != nil {
-			return nil, err
-		}
-
-		var indexes []IndexInfo
-		for indexesCursor.Next(context.TODO()) {
-			var index IndexInfo
-			if err := indexesCursor.Decode(&index); err != nil {
-				return nil, err
-			}
-			if index.Name != "_id_" { // Exclude the default _id index
-				indexes = append(indexes, index)
-			}
-		}
-
-		configCollections = append(configCollections, ConfigCollection{
-			Collection: collectionName,
-			Indexes:    indexes,
-		})
-	}
-
-	return configCollections, nil
 }
 
 // Drop and apply the indexes
@@ -101,42 +79,6 @@ func applyDiff(indexDiff *IndexDiff) {
 		}
 	}
 }
-
-// Create index of on the given collection with index Name and columns
-func CreateIndex(collection string, indexName string, index IndexInfo) error {
-	coll := db.Collection(collection)
-	indexOptions := options.Index().SetName(index.Name).SetUnique(index.Unique)
-
-	if index.Weights != nil {
-		indexOptions.SetWeights(index.Weights)
-	}
-
-	if index.PartialFilterExpression != nil {
-		indexOptions.SetPartialFilterExpression(index.PartialFilterExpression)
-	}
-
-	if index.Collation != nil {
-		collation := options.Collation{}
-		// Assume the collation map contains the locale field.
-		if locale, ok := index.Collation["locale"].(string); ok {
-			collation.Locale = locale
-		}
-		indexOptions.SetCollation(&collation)
-	}
-
-	indexModel := mongo.IndexModel{
-		Keys:    index.Key,
-		Options: indexOptions,
-	}
-
-	_, err := coll.Indexes().CreateOne(context.Background(), indexModel)
-	if err != nil {
-		log.Printf("Error creating index: %v", err)
-	}
-	return err
-}
-
-// Drop an index by Name from given collection
 func DropIndex(collection string, indexName string) bool {
 	indexes := db.Collection(collection).Indexes()
 	_, err := indexes.DropOne(context.TODO(), indexName)
@@ -146,6 +88,38 @@ func DropIndex(collection string, indexName string) bool {
 	}
 
 	return true
+}
+
+// Create index of on the given collection with index Name and columns
+func CreateIndex(collection string, indexName string, index IndexInfo) error {
+	coll := db.Collection(collection)
+	indexOptions := options.Index().SetName(index.Name)
+
+	// Transform the IndexKey slice to a BSON document
+	keysDoc := bson.D{}
+	for _, key := range index.Key {
+		keysDoc = append(keysDoc, bson.E{Key: key.Key, Value: key.Value})
+	}
+
+	// Set collation if specified and non-empty
+	if len(index.CollationOptions.Locale) > 0 {
+		collation := options.Collation{
+			Locale:          index.CollationOptions.Locale,
+			NumericOrdering: index.CollationOptions.NumericOrdering,
+		}
+		indexOptions.SetCollation(&collation)
+	}
+
+	indexModel := mongo.IndexModel{
+		Keys:    keysDoc, // Updated to use keysDoc
+		Options: indexOptions,
+	}
+
+	_, err := coll.Indexes().CreateOne(context.Background(), indexModel)
+	if err != nil {
+		log.Printf("Error creating index: %v", err)
+	}
+	return err
 }
 
 // Show the index difference, the indexes with `-` will be deleted only
@@ -199,7 +173,11 @@ func getIndexesDiff() *IndexDiff {
 
 	for _, configCollection := range configCollections {
 		collectionName := configCollection.Collection
-		currentIndexes := DbIndexes(collectionName)
+		currentIndexes, err := getIndexesForCollection(collectionName)
+		if err != nil {
+			log.Printf("Error while getting indexes for collection %s: %s", collectionName, err)
+			continue // or handle the error in some other way
+		}
 
 		// Maps to store the indexes by hash for easy comparison
 		configIndexMap := make(map[string]IndexInfo)
@@ -257,34 +235,53 @@ func Collections() []string {
 	return collections
 }
 
-func DbIndexes(collection string) []IndexInfo {
-	coll := db.Collection(collection)
-	cursor, err := coll.Indexes().List(context.Background())
-	if err != nil {
-		log.Printf("Error while listing indexes: %s", err)
-		return nil
-	}
-	var indexes []IndexInfo
-	for cursor.Next(context.Background()) {
-		var index IndexInfo
-		if err = cursor.Decode(&index); err != nil {
-			log.Printf("Error while decoding index: %s", err)
-			return nil
-		}
-		if index.Name == "_id_" {
-			continue
-		}
-		indexes = append(indexes, index)
-	}
-	if err = cursor.Err(); err != nil {
-		log.Printf("Error after iterating through indexes: %s", err)
-		return nil
-	}
-	cursor.Close(context.Background())
-	return indexes
-}
-
 // Drop index from collection by index Name
 func IsCollectionToIndex(collection string) bool {
 	return GetConfigCollection(collection) != nil
+}
+
+func getIndexesForCollection(collectionName string) ([]IndexInfo, error) {
+	collection := db.Collection(collectionName)
+	indexesCursor, err := collection.Indexes().List(context.TODO())
+	if err != nil {
+		return nil, err
+	}
+
+	var indexes []IndexInfo
+	for indexesCursor.Next(context.TODO()) {
+		var indexData bson.D
+		if err := indexesCursor.Decode(&indexData); err != nil {
+			return nil, err
+		}
+
+		index := IndexInfo{}
+
+		for _, item := range indexData {
+			key := item.Key
+			value := item.Value
+
+			if key == "key" {
+				keyValuePairs := value.(bson.D)
+				for _, keyValuePair := range keyValuePairs {
+					index.Key = append(index.Key, IndexKey{Key: keyValuePair.Key, Value: keyValuePair.Value})
+				}
+			} else if key == "name" {
+				index.Name = value.(string)
+			} else if key == "collation" {
+				collationMap := value.(bson.D)
+				for _, collationItem := range collationMap {
+					if collationItem.Key == "locale" {
+						index.CollationOptions.Locale = collationItem.Value.(string)
+					} else if collationItem.Key == "numericOrdering" {
+						index.CollationOptions.NumericOrdering = collationItem.Value.(bool)
+					}
+				}
+			}
+		}
+
+		if index.Name != "_id_" {
+			indexes = append(indexes, index)
+		}
+	}
+	return indexes, nil
 }

@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+
+	jsoniter "github.com/json-iterator/go"
 )
 
 func ConfigCollections() []ConfigCollection {
@@ -42,17 +44,17 @@ func GetConfigCollection(collection string) *ConfigCollection {
 }
 
 func writeConfigToFile(configCollections []ConfigCollection) error {
-	path, _ := filepath.Abs(*config)
-
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	data, err := json.MarshalIndent(configCollections, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	err = ioutil.WriteFile(path, data, 0644)
+	path, _ := filepath.Abs(*config)
+
+	err = os.WriteFile(path, data, 0644)
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
